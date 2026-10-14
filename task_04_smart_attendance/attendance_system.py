@@ -38,11 +38,12 @@ from utils.camera_utils import get_camera, release_and_close, put_text
 
 try:
     import face_recognition
+    USE_FACE_RECOGNITION = True
+    print("[INFO] Using face_recognition library (128-D embeddings).")
 except ImportError:
-    print("[ERROR] face_recognition library is required.")
-    print("        Install: pip install face_recognition")
-    print("        Also requires dlib. See: https://github.com/ageitgey/face_recognition")
-    sys.exit(1)
+    USE_FACE_RECOGNITION = False
+    print("[INFO] face_recognition not available. Using OpenCV Haar Cascade + LBPH.")
+    print("       For better accuracy: pip install face_recognition dlib")
 
 # ── Configuration ──
 KNOWN_FACES_DIR = os.path.join(os.path.dirname(__file__), "..", "known_faces")
@@ -95,15 +96,34 @@ def load_known_faces(directory):
         name = name.replace("_", " ")
 
         try:
-            image = face_recognition.load_image_file(filepath)
-            encodings = face_recognition.face_encodings(image)
-
-            if encodings:
-                known_encodings.append(encodings[0])
-                known_names.append(name)
-                print(f"  ✔ Loaded: {name} ({filename})")
+            if USE_FACE_RECOGNITION:
+                image = face_recognition.load_image_file(filepath)
+                encodings = face_recognition.face_encodings(image)
+                if encodings:
+                    known_encodings.append(encodings[0])
+                    known_names.append(name)
+                    print(f"  ✔ Loaded: {name} ({filename})")
+                else:
+                    print(f"  ✘ No face found in: {filename}")
             else:
-                print(f"  ✘ No face found in: {filename}")
+                # OpenCV Haar Cascade fallback: store grayscale face ROI
+                img = cv2.imread(filepath)
+                if img is None:
+                    print(f"  ✘ Cannot read: {filename}")
+                    continue
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                cascade = cv2.CascadeClassifier(
+                    cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+                )
+                faces = cascade.detectMultiScale(gray, 1.1, 5, minSize=(60, 60))
+                if len(faces) > 0:
+                    x, y, w, h = faces[0]
+                    face_roi = cv2.resize(gray[y:y+h, x:x+w], (200, 200))
+                    known_encodings.append(face_roi)
+                    known_names.append(name)
+                    print(f"  ✔ Loaded: {name} ({filename})")
+                else:
+                    print(f"  ✘ No face found in: {filename}")
         except Exception as e:
             print(f"  ✘ Error loading {filename}: {e}")
 
@@ -193,45 +213,76 @@ def main():
 
         # Process every Nth frame for performance
         if frame_count % PROCESS_EVERY_N == 0 and known_encodings:
-            # Resize for faster processing
-            small_frame = cv2.resize(frame, (0, 0),
-                                     fx=FRAME_SCALE, fy=FRAME_SCALE)
-            rgb_small = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
+            if USE_FACE_RECOGNITION:
+                # ── face_recognition library path ──
+                small_frame = cv2.resize(frame, (0, 0),
+                                         fx=FRAME_SCALE, fy=FRAME_SCALE)
+                rgb_small = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
 
-            # Detect faces
-            face_locations = face_recognition.face_locations(rgb_small)
-            face_encodings = face_recognition.face_encodings(rgb_small, face_locations)
+                face_locations = face_recognition.face_locations(rgb_small)
+                face_encs = face_recognition.face_encodings(rgb_small, face_locations)
 
-            face_locations_display = []
-            face_names_display = []
+                face_locations_display = []
+                face_names_display = []
 
-            for encoding, location in zip(face_encodings, face_locations):
-                # Compare with known faces
-                distances = face_recognition.face_distance(known_encodings, encoding)
-                matches = face_recognition.compare_faces(
-                    known_encodings, encoding, tolerance=args.tolerance
+                for encoding, location in zip(face_encs, face_locations):
+                    distances = face_recognition.face_distance(known_encodings, encoding)
+                    matches = face_recognition.compare_faces(
+                        known_encodings, encoding, tolerance=args.tolerance
+                    )
+
+                    name = "Unknown"
+                    confidence = 0.0
+
+                    if True in matches:
+                        best_idx = np.argmin(distances)
+                        if matches[best_idx]:
+                            name = known_names[best_idx]
+                            confidence = 1.0 - distances[best_idx]
+                            if mark_attendance(attendance_file, name, marked_today):
+                                print(f"  ✔ ATTENDANCE: {name} marked present!")
+
+                    top, right, bottom, left = location
+                    scale = int(1 / FRAME_SCALE)
+                    face_locations_display.append(
+                        (top * scale, right * scale, bottom * scale, left * scale)
+                    )
+                    face_names_display.append((name, confidence))
+            else:
+                # ── OpenCV Haar Cascade + LBPH fallback ──
+                cascade = cv2.CascadeClassifier(
+                    cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
                 )
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                detected = cascade.detectMultiScale(gray, 1.1, 5, minSize=(60, 60))
 
-                name = "Unknown"
-                confidence = 0.0
+                face_locations_display = []
+                face_names_display = []
 
-                if True in matches:
-                    best_idx = np.argmin(distances)
-                    if matches[best_idx]:
-                        name = known_names[best_idx]
-                        confidence = 1.0 - distances[best_idx]
+                for (x, y, w, h) in detected:
+                    face_roi = cv2.resize(gray[y:y+h, x:x+w], (200, 200))
+                    name = "Unknown"
+                    confidence = 0.0
 
-                        # Mark attendance
+                    # Simple template matching against known faces
+                    best_score = float('inf')
+                    best_name = "Unknown"
+                    for enc, kname in zip(known_encodings, known_names):
+                        diff = cv2.absdiff(face_roi, enc)
+                        score = np.mean(diff)
+                        if score < best_score:
+                            best_score = score
+                            best_name = kname
+
+                    # Threshold: lower score = better match
+                    if best_score < 80:  # adjustable threshold
+                        name = best_name
+                        confidence = max(0, 1.0 - best_score / 100.0)
                         if mark_attendance(attendance_file, name, marked_today):
                             print(f"  ✔ ATTENDANCE: {name} marked present!")
 
-                # Scale back location to full frame
-                top, right, bottom, left = location
-                scale = int(1 / FRAME_SCALE)
-                face_locations_display.append(
-                    (top * scale, right * scale, bottom * scale, left * scale)
-                )
-                face_names_display.append((name, confidence))
+                    face_locations_display.append((y, x + w, y + h, x))
+                    face_names_display.append((name, confidence))
 
         # Draw results
         for (top, right, bottom, left), (name, conf) in zip(

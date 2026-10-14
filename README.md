@@ -112,7 +112,7 @@ CV-Lab-11-Mobile-Camera/
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/CV-Lab-11-Mobile-Camera.git
+git clone https://github.com/Atul200429/CV-Lab-11-Mobile-Camera.git
 cd CV-Lab-11-Mobile-Camera
 ```
 

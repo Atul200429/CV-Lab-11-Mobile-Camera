@@ -36,8 +36,10 @@ try:
     from pyzbar.pyzbar import ZBarSymbol
     USE_PYZBAR = True
     print("[INFO] Using pyzbar for decoding.")
-except ImportError:
-    print("[INFO] pyzbar not found. Using OpenCV QRCodeDetector (QR codes only).")
+except (ImportError, OSError, FileNotFoundError):
+    print("[INFO] pyzbar not available. Using OpenCV QRCodeDetector (QR codes only).")
+    print("       To enable barcode support: pip install pyzbar")
+    print("       Also install Visual C++ Redistributable if DLL errors occur.")
 
 # ── Configuration ──
 LOG_DIR = os.path.join(os.path.dirname(__file__), "..", "inventory_log")
