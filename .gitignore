@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+env/
+.env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Project outputs (keep structure, ignore content)
+snapshots/*.jpg
+snapshots/*.png
+scanned_docs/*.png
+scanned_docs/*.pdf
+inventory_log/*.csv
+
+# Keep directories
+!snapshots/.gitkeep
+!scanned_docs/.gitkeep
+!inventory_log/.gitkeep
+!known_faces/.gitkeep
+!assets/.gitkeep
